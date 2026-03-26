@@ -20,58 +20,58 @@ This product was built for:
 ## Architecture
 
 ```
-┌────────────────────────────────────────────────────────────────────┐
-│                   STABLECOIN PAYOUT RAILS                          │
-│                                                                    │
+┌───────────────────────────────────────────────────────────────────┐
+│                   STABLECOIN PAYOUT RAILS                         │
+│                                                                   │
 │  ┌─────────────────────────────────────────────────────────────┐  │
 │  │                    MERCHANT / ENTERPRISE                    │  │
 │  │                                                             │  │
-│  │   POST /v1/payouts/stablecoin  ──────────────────────────► │  │
+│  │   POST /v1/payouts/stablecoin  ──────────────────────────►  │  │
 │  └─────────────────────────────────────────────────────────────┘  │
-│                              │                                     │
-│                              ▼                                     │
+│                              │                                    │
+│                              ▼                                    │
 │  ┌───────────────────────────────────────────────────────────┐    │
 │  │                  API GATEWAY + AUTH                       │    │
 │  │   API Key validation │ Rate limiting │ Idempotency check  │    │
 │  └───────────────────────────────────────────────────────────┘    │
-│                              │                                     │
+│                              │                                    │
 │              ┌───────────────┼──────────────────┐                 │
 │              ▼               ▼                  ▼                 │
-│  ┌──────────────┐  ┌──────────────────┐  ┌──────────────────┐    │
-│  │  COMPLIANCE  │  │  WALLET ABSTRAC- │  │  NETWORK         │    │
-│  │  LAYER       │  │  TION LAYER      │  │  SELECTOR        │    │
-│  │              │  │                  │  │                  │    │
-│  │ • Sanctions  │  │ • Merchant       │  │ Polygon  ──────► │    │
-│  │   screening  │  │   custody wallet │  │ (default, fast)  │    │
-│  │ • Wallet AML │  │ • Address        │  │                  │    │
-│  │   (KYT)      │  │   validation     │  │ Solana   ──────► │    │
-│  │ • Travel     │  │ • Multi-chain    │  │ (high volume)    │    │
-│  │   rule       │  │   routing        │  │                  │    │
-│  └──────────────┘  └──────────────────┘  │ Ethereum ──────► │    │
-│                                          │ (large amounts)  │    │
-│                                          └──────────────────┘    │
-│                              │                                     │
-│                              ▼                                     │
+│  ┌──────────────┐  ┌──────────────────┐  ┌──────────────────┐     │
+│  │  COMPLIANCE  │  │  WALLET ABSTRAC- │  │  NETWORK         │     │
+│  │  LAYER       │  │  TION LAYER      │  │  SELECTOR        │     │
+│  │              │  │                  │  │                  │     │
+│  │ • Sanctions  │  │ • Merchant       │  │ Polygon  ──────► │     │
+│  │   screening  │  │   custody wallet │  │ (default, fast)  │     │
+│  │ • Wallet AML │  │ • Address        │  │                  │     │
+│  │   (KYT)      │  │   validation     │  │ Solana   ──────► │     │
+│  │ • Travel     │  │ • Multi-chain    │  │ (high volume)    │     │ 
+│  │   rule       │  │   routing        │  │                  │     │
+│  └──────────────┘  └──────────────────┘  │ Ethereum ──────► │     │
+│                                          │ (large amounts)  │     │
+│                                          └──────────────────┘     │
+│                              │                                    │
+│                              ▼                                    │
 │  ┌───────────────────────────────────────────────────────────┐    │
 │  │                 EXECUTION ENGINE                          │    │
 │  │                                                           │    │
-│  │  Sign transaction → Broadcast → Monitor → Confirm        │    │
+│  │  Sign transaction → Broadcast → Monitor → Confirm         │    │
 │  │                                                           │    │
-│  │  ┌───────────┐  ┌──────────────┐  ┌──────────────────┐  │    │
-│  │  │ Polygon   │  │   Solana     │  │    Ethereum      │  │    │
-│  │  │ RPC Node  │  │   RPC Node   │  │    RPC Node      │  │    │
-│  │  │ (Alchemy) │  │  (Helius)    │  │    (Alchemy)     │  │    │
-│  │  └───────────┘  └──────────────┘  └──────────────────┘  │    │
+│  │  ┌───────────┐  ┌──────────────┐  ┌──────────────────┐    │    │
+│  │  │ Polygon   │  │   Solana     │  │    Ethereum      │    │    │
+│  │  │ RPC Node  │  │   RPC Node   │  │    RPC Node      │    │    │
+│  │  │ (Alchemy) │  │  (Helius)    │  │    (Alchemy)     │    │    │
+│  │  └───────────┘  └──────────────┘  └──────────────────┘    │    │
 │  └───────────────────────────────────────────────────────────┘    │
-│                              │                                     │
-│                              ▼                                     │
+│                              │                                    │
+│                              ▼                                    │
 │  ┌───────────────────────────────────────────────────────────┐    │
 │  │                 RECONCILIATION & REPORTING                │    │
 │  │                                                           │    │
-│  │  On-chain event indexing → Canonical ledger → Webhooks   │    │
-│  │  Merchant dashboard → Daily settlement reports           │    │
+│  │  On-chain event indexing → Canonical ledger → Webhooks    │    │
+│  │  Merchant dashboard → Daily settlement reports            │    │
 │  └───────────────────────────────────────────────────────────┘    │
-└────────────────────────────────────────────────────────────────────┘
+└───────────────────────────────────────────────────────────────────┘
 ```
 
 ---
