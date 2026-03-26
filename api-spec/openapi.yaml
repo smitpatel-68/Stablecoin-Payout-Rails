@@ -1,0 +1,280 @@
+openapi: 3.0.3
+info:
+  title: Stablecoin Payout Rails API
+  description: |
+    Send cross-border USDC/USDT payouts across Polygon, Solana, and Ethereum.
+    Single API endpoint — platform handles network selection, execution, and compliance.
+  version: 1.0.0
+
+servers:
+  - url: https://api.yourcompany.com/v1
+    description: Production
+  - url: https://sandbox.api.yourcompany.com/v1
+    description: Sandbox
+
+paths:
+  /payouts/stablecoin:
+    post:
+      summary: Create a stablecoin payout
+      description: |
+        Submit a stablecoin payout. Platform will select the optimal network 
+        (unless specified), screen the beneficiary wallet, execute, and confirm.
+        Status delivered via webhook or polling.
+      operationId: createStablecoinPayout
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PayoutRequest'
+            examples:
+              polygon_auto:
+                summary: Auto-routed payout (platform picks Polygon)
+                value:
+                  idempotency_key: "payout_march_inv_0042"
+                  amount:
+                    value: 5000
+                    currency: USDC
+                  beneficiary:
+                    wallet_address: "0xRecipientAddressHere"
+                    name: "Supplier Co. Ltd"
+                  network: auto
+                  webhook_url: "https://yourapp.com/webhooks/payouts"
+              solana_explicit:
+                summary: Explicit Solana payout
+                value:
+                  idempotency_key: "payout_march_inv_0043"
+                  amount:
+                    value: 250
+                    currency: USDC
+                  beneficiary:
+                    wallet_address: "SolanaRecipientAddressHere"
+                    name: "Freelancer XYZ"
+                  network: solana
+                  webhook_url: "https://yourapp.com/webhooks/payouts"
+      responses:
+        '202':
+          description: Payout accepted. Execution begins asynchronously.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PayoutAccepted'
+        '400':
+          description: Bad request — invalid wallet address, amount, or currency
+        '422':
+          description: Compliance block
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ComplianceBlock'
+
+  /payouts/stablecoin/{payout_id}:
+    get:
+      summary: Get payout status
+      operationId: getPayoutStatus
+      parameters:
+        - name: payout_id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PayoutDetail'
+
+  /payouts/stablecoin/estimate:
+    post:
+      summary: Estimate fee and network for a payout
+      description: Get a fee estimate and network recommendation before committing.
+      operationId: estimatePayout
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                amount:
+                  type: object
+                  properties:
+                    value:
+                      type: number
+                    currency:
+                      type: string
+                network:
+                  type: string
+                  default: auto
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/FeeEstimate'
+
+components:
+  schemas:
+    PayoutRequest:
+      type: object
+      required: [idempotency_key, amount, beneficiary]
+      properties:
+        idempotency_key:
+          type: string
+          description: Unique key — same key returns same payout object, never double-pays
+          example: "inv_2025_0042_payout"
+        amount:
+          type: object
+          required: [value, currency]
+          properties:
+            value:
+              type: number
+              minimum: 0.01
+              description: Amount to send
+            currency:
+              type: string
+              enum: [USDC, USDT]
+        beneficiary:
+          type: object
+          required: [wallet_address]
+          properties:
+            wallet_address:
+              type: string
+              description: EVM address (0x...) for Polygon/Ethereum, base58 for Solana
+            name:
+              type: string
+              description: Legal name of beneficiary (required for Travel Rule if amount > $3,000)
+            entity_type:
+              type: string
+              enum: [individual, business]
+        network:
+          type: string
+          enum: [auto, polygon, solana, ethereum]
+          default: auto
+          description: |
+            auto = platform selects optimal network based on amount, volume, and gas.
+            Specify to force a particular chain.
+        webhook_url:
+          type: string
+          format: uri
+          description: URL to receive payout status events
+        metadata:
+          type: object
+          additionalProperties:
+            type: string
+          description: Your internal references (invoice_id, order_id, etc.)
+
+    PayoutAccepted:
+      type: object
+      properties:
+        payout_id:
+          type: string
+          example: "po_01HXYZABC..."
+        status:
+          type: string
+          enum: [QUEUED]
+        network_selected:
+          type: string
+          example: "polygon"
+        estimated_fee_usd:
+          type: number
+          example: 0.12
+        estimated_settlement_minutes:
+          type: integer
+          example: 2
+        created_at:
+          type: string
+          format: date-time
+
+    PayoutDetail:
+      type: object
+      properties:
+        payout_id:
+          type: string
+        status:
+          type: string
+          enum: [QUEUED, COMPLIANCE_SCREENING, EXECUTING, CONFIRMING, COMPLETED, FAILED, BLOCKED]
+        amount:
+          type: object
+          properties:
+            value:
+              type: number
+            currency:
+              type: string
+        network:
+          type: string
+        compliance:
+          type: object
+          properties:
+            sanctions_check:
+              type: string
+              enum: [PASS, FAIL, PENDING]
+            kyt_risk_score:
+              type: integer
+            kyt_verdict:
+              type: string
+              enum: [LOW, MEDIUM, HIGH]
+        execution:
+          type: object
+          properties:
+            tx_hash:
+              type: string
+              description: Blockchain transaction hash
+            block_number:
+              type: integer
+            confirmations:
+              type: integer
+            fee_paid_usd:
+              type: number
+            gas_used:
+              type: integer
+            settled_at:
+              type: string
+              format: date-time
+
+    FeeEstimate:
+      type: object
+      properties:
+        recommended_network:
+          type: string
+        estimated_fee_usd:
+          type: number
+        estimated_settlement_minutes:
+          type: integer
+        current_gas_gwei:
+          type: number
+        alternatives:
+          type: array
+          items:
+            type: object
+            properties:
+              network:
+                type: string
+              fee_usd:
+                type: number
+              settlement_minutes:
+                type: integer
+
+    ComplianceBlock:
+      type: object
+      properties:
+        code:
+          type: string
+          enum: [SANCTIONS_HIT, KYT_HIGH_RISK, TRAVEL_RULE_REQUIRED, JURISDICTION_RESTRICTED]
+        message:
+          type: string
+        case_id:
+          type: string
+        remediation:
+          type: string
+          description: What the merchant can do to resolve the block
+
+  securitySchemes:
+    ApiKeyAuth:
+      type: apiKey
+      in: header
+      name: X-API-Key
+
+security:
+  - ApiKeyAuth: []
