@@ -20,58 +20,58 @@ This product was built for:
 ## Architecture
 
 ```
-┌───────────────────────────────────────────────────────────────────┐
-│                   STABLECOIN PAYOUT RAILS                         │
-│                                                                   │
+┌────────────────────────────────────────────────────────────────────┐
+│                   STABLECOIN PAYOUT RAILS                          │
+│                                                                    │
 │  ┌─────────────────────────────────────────────────────────────┐  │
 │  │                    MERCHANT / ENTERPRISE                    │  │
 │  │                                                             │  │
-│  │   POST /v1/payouts/stablecoin  ──────────────────────────►  │  │
+│  │   POST /v1/payouts/stablecoin  ──────────────────────────► │  │
 │  └─────────────────────────────────────────────────────────────┘  │
-│                              │                                    │
-│                              ▼                                    │
+│                              │                                     │
+│                              ▼                                     │
 │  ┌───────────────────────────────────────────────────────────┐    │
 │  │                  API GATEWAY + AUTH                       │    │
 │  │   API Key validation │ Rate limiting │ Idempotency check  │    │
 │  └───────────────────────────────────────────────────────────┘    │
-│                              │                                    │
+│                              │                                     │
 │              ┌───────────────┼──────────────────┐                 │
 │              ▼               ▼                  ▼                 │
-│  ┌──────────────┐  ┌──────────────────┐  ┌──────────────────┐     │
-│  │  COMPLIANCE  │  │  WALLET ABSTRAC- │  │  NETWORK         │     │
-│  │  LAYER       │  │  TION LAYER      │  │  SELECTOR        │     │
-│  │              │  │                  │  │                  │     │
-│  │ • Sanctions  │  │ • Merchant       │  │ Polygon  ──────► │     │
-│  │   screening  │  │   custody wallet │  │ (default, fast)  │     │
-│  │ • Wallet AML │  │ • Address        │  │                  │     │
-│  │   (KYT)      │  │   validation     │  │ Solana   ──────► │     │
-│  │ • Travel     │  │ • Multi-chain    │  │ (high volume)    │     │ 
-│  │   rule       │  │   routing        │  │                  │     │
-│  └──────────────┘  └──────────────────┘  │ Ethereum ──────► │     │
-│                                          │ (large amounts)  │     │
-│                                          └──────────────────┘     │
-│                              │                                    │
-│                              ▼                                    │
+│  ┌──────────────┐  ┌──────────────────┐  ┌──────────────────┐    │
+│  │  COMPLIANCE  │  │  WALLET ABSTRAC- │  │  NETWORK         │    │
+│  │  LAYER       │  │  TION LAYER      │  │  SELECTOR        │    │
+│  │              │  │                  │  │                  │    │
+│  │ • Sanctions  │  │ • Merchant       │  │ Polygon  ──────► │    │
+│  │   screening  │  │   custody wallet │  │ (default, fast)  │    │
+│  │ • Wallet AML │  │ • Address        │  │                  │    │
+│  │   (KYT)      │  │   validation     │  │ Solana   ──────► │    │
+│  │ • Travel     │  │ • Multi-chain    │  │ (high volume)    │    │
+│  │   rule       │  │   routing        │  │                  │    │
+│  └──────────────┘  └──────────────────┘  │ Ethereum ──────► │    │
+│                                          │ (large amounts)  │    │
+│                                          └──────────────────┘    │
+│                              │                                     │
+│                              ▼                                     │
 │  ┌───────────────────────────────────────────────────────────┐    │
 │  │                 EXECUTION ENGINE                          │    │
 │  │                                                           │    │
-│  │  Sign transaction → Broadcast → Monitor → Confirm         │    │
+│  │  Sign transaction → Broadcast → Monitor → Confirm        │    │
 │  │                                                           │    │
-│  │  ┌───────────┐  ┌──────────────┐  ┌──────────────────┐    │    │
-│  │  │ Polygon   │  │   Solana     │  │    Ethereum      │    │    │
-│  │  │ RPC Node  │  │   RPC Node   │  │    RPC Node      │    │    │
-│  │  │ (Alchemy) │  │  (Helius)    │  │    (Alchemy)     │    │    │
-│  │  └───────────┘  └──────────────┘  └──────────────────┘    │    │
+│  │  ┌───────────┐  ┌──────────────┐  ┌──────────────────┐  │    │
+│  │  │ Polygon   │  │   Solana     │  │    Ethereum      │  │    │
+│  │  │ RPC Node  │  │   RPC Node   │  │    RPC Node      │  │    │
+│  │  │ (Alchemy) │  │  (Helius)    │  │    (Alchemy)     │  │    │
+│  │  └───────────┘  └──────────────┘  └──────────────────┘  │    │
 │  └───────────────────────────────────────────────────────────┘    │
-│                              │                                    │
-│                              ▼                                    │
+│                              │                                     │
+│                              ▼                                     │
 │  ┌───────────────────────────────────────────────────────────┐    │
 │  │                 RECONCILIATION & REPORTING                │    │
 │  │                                                           │    │
-│  │  On-chain event indexing → Canonical ledger → Webhooks    │    │
-│  │  Merchant dashboard → Daily settlement reports            │    │
+│  │  On-chain event indexing → Canonical ledger → Webhooks   │    │
+│  │  Merchant dashboard → Daily settlement reports           │    │
 │  └───────────────────────────────────────────────────────────┘    │
-└───────────────────────────────────────────────────────────────────┘
+└────────────────────────────────────────────────────────────────────┘
 ```
 
 ---
@@ -153,6 +153,28 @@ Rationale: Merchant sends funds to our custody wallet for execution (needed for 
 
 ---
 
+## Simulator
+
+The `/simulator` directory contains a working Python prototype that demonstrates the network selection and compliance logic:
+
+```bash
+# Run demo scenarios (7 test cases covering all routing paths)
+python simulator/payout_simulator.py --demo
+
+# Interactive mode — input your own payout parameters
+python simulator/payout_simulator.py
+```
+
+The simulator covers:
+- **Network selection**: Amount-based, volume-based, and gas-aware routing
+- **Compliance screening**: Sanctions checking, KYT risk scoring, Travel Rule triggers
+- **Execution simulation**: Tx hash generation, settlement time estimation
+- **Failure paths**: Blocked payouts, flagged-for-review, dead letter queue
+
+Demo scenarios include: standard Philippines payout (→ Polygon), $250K enterprise wire (→ Ethereum), high-volume marketplace (→ Solana), sanctioned wallet (→ blocked), and Travel Rule edge cases.
+
+---
+
 ## Repo Structure
 
 ```
@@ -168,10 +190,31 @@ stablecoin-payout-rails/
 │   └── network-topology.md      ← Multi-chain architecture diagram
 ├── api-spec/
 │   └── openapi.yaml             ← Stablecoin payout API contract
+├── simulator/
+│   ├── payout_simulator.py      ← Working prototype — network selection + compliance
+│   └── agent_simulator.py       ← Agentic payments expansion — MPP/x402 integration
 └── workflows/
     ├── polygon-payout.md        ← End-to-end Polygon payout flow
     ├── solana-payout.md         ← Solana-specific considerations
     └── travel-rule.md           ← FATF Travel Rule compliance flow
+```
+
+---
+
+## Agentic Payments Expansion
+
+The `/docs/agentic-expansion-strategy.md` proposes three paths for expanding into the agent economy using MPP (Stripe/Tempo) and x402 (Coinbase) protocols:
+
+1. **Last-Mile Rail** — Tazapay as the fiat off-ramp for agent-initiated payments. Agent pays via MPP session → Tazapay converts stablecoin to local fiat → supplier gets paid in PHP/INR/VND.
+
+2. **Agent Wallet Orchestrator** — Managed wallets for enterprise AI agents with spending policies (daily limits, allowed corridors, human approval thresholds). Full compliance screening on every agent payment.
+
+3. **MPP-Discoverable Service** — Tazapay's payout APIs listed in the MPP payments directory. AI agents discover and pay per-payout with zero onboarding.
+
+Run the agent simulator to see all three paths in action:
+
+```bash
+python simulator/agent_simulator.py --demo
 ```
 
 ---
