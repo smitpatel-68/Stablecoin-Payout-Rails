@@ -62,7 +62,22 @@ A multi-chain stablecoin payout API that:
 
 ---
 
-## 5. Phased Delivery
+## 5. Funding Model — How Merchants Supply Stablecoins
+
+Enterprise merchants typically hold fiat, not stablecoins. The platform supports two funding paths:
+
+### Path A: Fiat Pre-Funding (Default)
+Merchant deposits fiat (USD, EUR, SGD) into a Tazapay holding account. Tazapay on-ramps to USDC via Circle's mint/redeem API or a licensed on-ramp partner (e.g., MoonPay Business, Transak). The USDC is held in the platform custody wallet, earmarked for the merchant's payouts. Merchant sees a fiat-denominated balance on their dashboard — they never interact with stablecoins directly.
+
+### Path B: Direct Stablecoin Funding
+Crypto-native merchants send USDC/USDT directly to a merchant-specific deposit address on the supported chain. The platform detects the deposit via webhook listeners (Alchemy Notify), credits the merchant's balance, and the funds are available for payouts immediately.
+
+### Custody Wallet Rebalancing
+When payout demand is concentrated on one chain (e.g., 80% Polygon), the platform uses Circle CCTP to rebalance USDC across chains without bridging risk. Rebalancing runs as a background job triggered when any chain's custody wallet drops below 24 hours of projected payout volume.
+
+---
+
+## 6. Phased Delivery
 
 ### Phase 1 — Polygon USDC (Weeks 1–6)
 **Scope:**
@@ -96,7 +111,7 @@ A multi-chain stablecoin payout API that:
 
 ---
 
-## 6. Compliance Framework
+## 7. Compliance Framework
 
 ### KYT (Know Your Transaction)
 - **Provider:** Chainalysis KYT
@@ -119,7 +134,7 @@ A multi-chain stablecoin payout API that:
 
 ---
 
-## 7. Success Metrics
+## 8. Success Metrics
 
 ### Primary
 - **Payout Success Rate** — % of initiated payouts that complete (target: >99%)
@@ -133,11 +148,11 @@ A multi-chain stablecoin payout API that:
 
 ---
 
-## 8. Open Questions / Decisions Log
+## 9. Open Questions / Decisions Log
 
 | Question | Decision | Rationale | Date |
 |---|---|---|---|
-| USDC-first vs USDT-first? | USDC-first | Better regulatory standing, Circle attestations | Q4 2024 |
-| Custodial vs non-custodial? | Custodial for transit only | Speed + gas management; no overnight float | Q4 2024 |
-| Polygon vs Ethereum as default? | Polygon default | Cost + speed; Eth for large amounts | Q4 2024 |
-| Build Travel Rule in-house vs vendor? | Vendor (Notabene) | Regulatory complexity too high to build; TTM priority | Q1 2025 |
+| USDC-first vs USDT-first? | USDC-first | Better regulatory standing, Circle attestations | Q4 2025 |
+| Custodial vs non-custodial? | Custodial for transit only | Speed + gas management; no overnight float | Q4 2025 |
+| Polygon vs Ethereum as default? | Polygon default | Cost + speed; Eth for large amounts | Q4 2025 |
+| Build Travel Rule in-house vs vendor? | Vendor (Notabene) | Regulatory complexity too high to build; TTM priority | Q1 2026 |

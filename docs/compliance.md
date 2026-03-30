@@ -86,7 +86,7 @@ When the beneficiary wallet is not associated with any known VASP:
 |---|---|---|---|
 | EU (MiCA) | Mandatory | €0 (all transfers) | Stricter than FATF — applies to all amounts |
 | Singapore (MAS) | Mandatory | SGD 1,500 | Aligned with FATF |
-| US (GENIUS Act) | Mandatory (July 2026) | $3,000 | Pending final rules |
+| US (GENIUS Act) | Mandatory (H2 2026) | $3,000 | Pending final rules |
 | UK (FCA) | Mandatory | £1,000 | |
 | UAE (VARA) | Mandatory | AED 3,500 | |
 | Canada (FINTRAC) | Mandatory | CAD 1,000 | |
@@ -128,7 +128,22 @@ Every compliance decision is logged immutably:
 
 ---
 
-## 5. Ongoing Monitoring
+## 5. Tron-Specific Compliance Considerations
+
+Tron is used as a gas-spike fallback for USDT payouts. It requires additional scrutiny:
+
+**Elevated risk profile:** Tron's USDT ecosystem has disproportionate exposure to sanctioned entities and illicit finance. TRM Labs and Chainalysis both flag Tron-based USDT transfers at higher rates than EVM-chain equivalents.
+
+**Enhanced screening for Tron payouts:**
+- KYT screening applies to all Tron payouts (same as other chains)
+- Additional check: Tron wallet exposure analysis — if the beneficiary wallet has >5% exposure to OFAC-flagged addresses in the last 90 days, the payout is blocked regardless of KYT score
+- Tron payouts are flagged in the reconciliation report with a `TRON_FALLBACK` tag for post-hoc compliance review
+
+**Policy:** Tron is never the primary rail. It activates only when Polygon gas exceeds 500 gwei and the merchant has opted into Tron fallback. Merchants must explicitly enable Tron via dashboard settings — it is not enabled by default.
+
+---
+
+## 6. Ongoing Monitoring
 
 Beyond per-transaction screening, the platform runs:
 

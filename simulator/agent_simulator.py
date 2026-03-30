@@ -543,6 +543,47 @@ def run_demo():
     )
     print_result(req3b, simulate_path3_discovery(req3b))
 
+    # ── EDGE CASES ──
+
+    print("\n\n" + "─" * 72)
+    print("  EDGE CASES: OFF-RAMP FAILURES")
+    print("─" * 72)
+
+    # 4a: Bank rejection on off-ramp
+    req4a = AgentPayoutRequest(
+        agent=AgentIdentity("agent_proc_001", "ProcurementBot-7", "AcmeCorp US", "0xAgentWallet001", "mpp"),
+        amount_usd=3200, currency_in="USDC", corridor="USD_IDR",
+        beneficiary_name="Jakarta Parts Co", beneficiary_account="INVALID_BANK_ACCT",
+        purpose="Supplier payment — bank details mismatch", expansion_path=1,
+    )
+    # Simulate bank rejection
+    result_4a = simulate_path1_last_mile(req4a)
+    if result_4a.status == "COMPLETED":
+        result_4a.status = "OFF_RAMP_FAILED"
+        result_4a.decision_rationale.append("⚠️ Local bank rejected: beneficiary account validation failed")
+        result_4a.decision_rationale.append("USDC held in custody — merchant notified to update beneficiary details")
+        result_4a.decision_rationale.append("Auto-refund to merchant stablecoin balance after 72hr hold")
+    print_result(req4a, result_4a)
+
+    # 4b: FX rate slippage between agent payment and fiat settlement
+    req4b = AgentPayoutRequest(
+        agent=AgentIdentity("agent_fin_005", "TreasuryBot", "CryptoNative Inc", "0xCryptoAgent", "mpp"),
+        amount_usd=25000, currency_in="USDC", corridor="USD_BRL",
+        beneficiary_name="SaoPaulo Manufacturing", beneficiary_account="BR_PIX_mfg@corp",
+        purpose="Large payment — FX rate moved during settlement", expansion_path=1,
+    )
+    result_4b = simulate_path1_last_mile(req4b)
+    if result_4b.status == "COMPLETED":
+        # Simulate FX slippage
+        original_fx = result_4b.off_ramp.get("fx_cost_usd", 0)
+        slippage = round(req4b.amount_usd * 0.0015, 2)  # 0.15% adverse move
+        result_4b.off_ramp["fx_slippage_usd"] = slippage
+        result_4b.off_ramp["fx_note"] = "BRL weakened 0.15% between quote and settlement"
+        result_4b.total_cost_usd = round(result_4b.total_cost_usd + slippage, 2)
+        result_4b.decision_rationale.append(f"⚠️ FX slippage: BRL moved 0.15% adverse — additional ${slippage:.2f} cost absorbed by platform")
+        result_4b.decision_rationale.append("Mitigation: FX rate locked for 30s at quote time. Slippage beyond lock window absorbed up to 0.25%, passed to merchant above that.")
+    print_result(req4b, result_4b)
+
     # ── SUMMARY ──
 
     print("\n\n" + "=" * 72)
@@ -551,9 +592,11 @@ def run_demo():
     print(f"\n  Path 1 (Last-Mile Rail):        2 scenarios — agent pays via MPP/x402, Tazapay off-ramps")
     print(f"  Path 2 (Wallet Orchestrator):    3 scenarios — managed wallets with spending policies")
     print(f"  Path 3 (Discoverable Service):   2 scenarios — agents find Tazapay in MPP directory")
+    print(f"  Edge Cases:                      2 scenarios — bank rejection + FX slippage")
     print(f"\n  Protocols demonstrated:          MPP (Stripe/Tempo), x402 (Coinbase)")
-    print(f"  Corridors used:                  PHP, INR, VND, MXN, BRL, NGN (blocked by policy)")
+    print(f"  Corridors used:                  PHP, INR, VND, MXN, BRL, IDR, NGN (blocked)")
     print(f"  Compliance paths:                CLEARED, Travel Rule, Policy Blocked, Human Approval")
+    print(f"  Failure paths:                   Off-ramp rejection, FX slippage")
     print("=" * 72)
 
 

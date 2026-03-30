@@ -72,6 +72,15 @@ HIGH_RISK_WALLETS = [
     "0xDarknetMarket002",
 ]
 
+# Stablecoin peg health (simulated — in production, fetched from DEX price feeds)
+PEG_STATUS = {
+    "USDC": {"price_usd": 1.0000, "deviation_pct": 0.00, "status": "HEALTHY"},
+    "USDT": {"price_usd": 0.9998, "deviation_pct": 0.02, "status": "HEALTHY"},
+}
+
+# Depeg threshold — if deviation exceeds this, all payouts in that stablecoin are paused
+DEPEG_THRESHOLD_PCT = 0.50
+
 
 # ─────────────────────────────────────────────
 # Data Models
@@ -287,10 +296,27 @@ def simulate_execution(network: str) -> tuple:
 # ─────────────────────────────────────────────
 
 def process_payout(request: PayoutRequest) -> PayoutResult:
-    """Full payout pipeline: compliance → network selection → execution."""
+    """Full payout pipeline: depeg check → compliance → network selection → execution."""
 
     start = time.time()
     payout_id = f"po_{''.join(random.choices('ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789', k=12))}"
+
+    # Step 0: Peg health check
+    peg = PEG_STATUS.get(request.currency, {})
+    if peg.get("deviation_pct", 0) >= DEPEG_THRESHOLD_PCT:
+        return PayoutResult(
+            payout_id=payout_id,
+            status="PAUSED_DEPEG",
+            compliance=ComplianceResult("N/A", 0, "N/A", False, "NONE", "PAUSED"),
+            network_decision=NetworkDecision("none", [
+                f"{request.currency} peg deviation: {peg['deviation_pct']:.2f}% (threshold: {DEPEG_THRESHOLD_PCT}%)",
+                f"Current price: ${peg['price_usd']:.4f}",
+                "All payouts in this stablecoin paused. Fallback to fiat if available.",
+            ], 0, 0, []),
+            tx_hash=None,
+            settled_at=None,
+            total_time_seconds=time.time() - start,
+        )
 
     # Step 1: Compliance screening
     compliance = screen_compliance(request)
@@ -360,8 +386,12 @@ def print_result(request: PayoutRequest, result: PayoutResult):
         print(f"    TR Action:    {result.compliance.travel_rule_action}")
     print(f"    Overall:      {result.compliance.overall}")
 
-    if result.status in ("BLOCKED", "FLAGGED_FOR_REVIEW"):
+    if result.status in ("BLOCKED", "FLAGGED_FOR_REVIEW", "PAUSED_DEPEG"):
         print(f"\n  Status: ⛔ {result.status}")
+        if result.status == "PAUSED_DEPEG":
+            print(f"\n  Depeg Rationale:")
+            for step in result.network_decision.rationale:
+                print(f"    → {step}")
         print("=" * 70)
         return
 
@@ -468,6 +498,18 @@ DEMO_SCENARIOS = [
             merchant_daily_volume=50,
         ),
     },
+    {
+        "name": "Stablecoin depeg event — USDT deviates >0.5%",
+        "request": PayoutRequest(
+            amount_usd=2000,
+            currency="USDT",
+            beneficiary_wallet="0xBb2Cc3Dd4Ee5Ff6Aa7Bb8Cc9Dd0Ee1Ff2Aa3Bb4Cc",
+            beneficiary_name="SEA Vendor Ltd",
+            network="auto",
+            merchant_daily_volume=200,
+        ),
+        "depeg_override": {"USDT": {"price_usd": 0.9940, "deviation_pct": 0.60, "status": "DEPEGGED"}},
+    },
 ]
 
 
@@ -481,14 +523,27 @@ def run_demo():
     results = []
     for scenario in DEMO_SCENARIOS:
         print(f"\n\n📋 Scenario: {scenario['name']}")
+
+        # Apply depeg override if specified in scenario
+        original_peg = {}
+        if "depeg_override" in scenario:
+            for token, peg_data in scenario["depeg_override"].items():
+                original_peg[token] = PEG_STATUS.get(token, {}).copy()
+                PEG_STATUS[token] = peg_data
+
         result = process_payout(scenario["request"])
         print_result(scenario["request"], result)
         results.append({"scenario": scenario["name"], "result": asdict(result)})
+
+        # Restore original peg status
+        for token, peg_data in original_peg.items():
+            PEG_STATUS[token] = peg_data
 
     # Summary
     completed = sum(1 for r in results if r["result"]["status"] == "COMPLETED")
     blocked = sum(1 for r in results if r["result"]["status"] == "BLOCKED")
     flagged = sum(1 for r in results if r["result"]["status"] == "FLAGGED_FOR_REVIEW")
+    depegged = sum(1 for r in results if r["result"]["status"] == "PAUSED_DEPEG")
 
     print("\n\n" + "=" * 70)
     print("  SUMMARY")
@@ -497,6 +552,7 @@ def run_demo():
     print(f"  Completed:      {completed}")
     print(f"  Blocked:        {blocked}")
     print(f"  Flagged:        {flagged}")
+    print(f"  Paused (depeg): {depegged}")
 
     networks_used = {}
     for r in results:
