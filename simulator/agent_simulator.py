@@ -13,6 +13,7 @@ Usage:
 
 import json
 import random
+import secrets
 import time
 import argparse
 from datetime import datetime, timedelta, timezone
@@ -237,7 +238,7 @@ def simulate_path2_orchestrator(request: AgentPayoutRequest, policy: SpendingPol
 
     # Step 2: Session management
     session = MPPSession(
-        session_id=f"sess_{''.join(random.choices('0123456789abcdef', k=16))}",
+        session_id=f"sess_{secrets.token_hex(8)}",
         agent_id=request.agent.agent_id,
         escrow_amount_usd=policy.daily_limit_usd,
         spent_usd=request.amount_usd,
@@ -388,11 +389,17 @@ def _run_compliance(request):
         "overall": "CLEARED",
     }
 
+_ID_ALPHABET = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
+
+
 def _gen_id():
-    return f"po_{''.join(random.choices('ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789', k=12))}"
+    # Use `secrets` for identifiers — `random` is not a CSPRNG. Simulated risk
+    # scoring below intentionally keeps `random` because it's non-security.
+    return f"po_{''.join(secrets.choice(_ID_ALPHABET) for _ in range(12))}"
+
 
 def _gen_hash():
-    return f"0x{''.join(random.choices('abcdef0123456789', k=64))}"
+    return f"0x{secrets.token_hex(32)}"
 
 def _blocked_result(request, reason):
     return AgentPayoutResult(

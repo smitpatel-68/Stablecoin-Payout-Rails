@@ -10,12 +10,12 @@ Takes payment parameters as input and outputs:
 
 Usage:
     python payout_simulator.py                    # Interactive mode
-    python payout_simulator.py --batch sample.csv # Batch mode from CSV
     python payout_simulator.py --demo             # Run demo scenarios
 """
 
 import json
 import random
+import secrets
 import time
 import argparse
 from datetime import datetime, timedelta, timezone
@@ -94,6 +94,9 @@ class PayoutRequest:
     beneficiary_name: str
     network: str  # "auto" or specific network
     merchant_daily_volume: int  # tx count today
+    # Merchant must explicitly opt in to Tron fallback — see docs/compliance.md §5.
+    # When False, gas-spike conditions queue for retry instead of routing to Tron.
+    tron_fallback_enabled: bool = False
     metadata: Optional[dict] = None
 
 
@@ -253,10 +256,11 @@ def select_network(request: PayoutRequest) -> NetworkDecision:
             ],
         )
 
-    # Step 4: Polygon gas spike → Tron fallback (USDT only)
-    if request.currency == "USDT" or request.currency == "USDC":
-        rationale.append(f"Polygon gas spike: {polygon_gas} gwei (> 500 threshold)")
-        rationale.append("Tron fallback selected — USDT, near-zero fees")
+    # Step 4: Polygon gas spike → Tron fallback. USDT only AND merchant must
+    # have opted in (see docs/network-selection.md and docs/compliance.md §5).
+    rationale.append(f"Polygon gas spike: {polygon_gas} gwei (>= 500 threshold)")
+    if request.currency == "USDT" and request.tron_fallback_enabled:
+        rationale.append("Tron fallback selected — USDT only, merchant opted in, near-zero fees")
         return NetworkDecision(
             selected_network="tron",
             rationale=rationale,
@@ -267,8 +271,11 @@ def select_network(request: PayoutRequest) -> NetworkDecision:
             ],
         )
 
-    # Fallback
-    rationale.append("Default fallback to Polygon")
+    # Step 5: Gas elevated, Tron unavailable (not USDT, or merchant opted out).
+    # Production would queue for 10-min retry per docs/network-selection.md;
+    # the simulator proceeds on Polygon to keep the demo flow finite.
+    rationale.append("Tron fallback unavailable (currency != USDT or merchant opt-out)")
+    rationale.append("Proceeding on Polygon (production: queue for 10min retry)")
     return NetworkDecision(
         selected_network="polygon",
         rationale=rationale,
@@ -285,7 +292,12 @@ def select_network(request: PayoutRequest) -> NetworkDecision:
 def simulate_execution(network: str) -> tuple:
     """Simulate transaction execution. Returns (tx_hash, settlement_time_seconds)."""
     net = NETWORKS[network]
-    tx_hash = f"0x{''.join(random.choices('abcdef0123456789', k=64))}"
+    # Use `secrets` for identifier / hash generation. `random` is a Mersenne
+    # Twister and is not suitable for anything that *looks* like a production
+    # transaction hash — readers shouldn't copy that pattern into real code.
+    tx_hash = f"0x{secrets.token_hex(32)}"
+    # `random.randint` is fine here: simulated settlement jitter is not
+    # security-relevant.
     settlement = net["avg_finality_seconds"] + random.randint(-10, 30)
     settlement = max(1, settlement)
     return tx_hash, settlement
@@ -299,7 +311,9 @@ def process_payout(request: PayoutRequest) -> PayoutResult:
     """Full payout pipeline: depeg check → compliance → network selection → execution."""
 
     start = time.time()
-    payout_id = f"po_{''.join(random.choices('ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789', k=12))}"
+    # Use `secrets` for the payout ID — see simulate_execution() note.
+    _id_alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
+    payout_id = f"po_{''.join(secrets.choice(_id_alphabet) for _ in range(12))}"
 
     # Step 0: Peg health check
     peg = PEG_STATUS.get(request.currency, {})
@@ -598,7 +612,6 @@ def interactive_mode():
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Stablecoin Payout Rails Simulator")
     parser.add_argument("--demo", action="store_true", help="Run demo scenarios")
-    parser.add_argument("--batch", type=str, help="Batch mode from CSV file")
     args = parser.parse_args()
 
     if args.demo:
