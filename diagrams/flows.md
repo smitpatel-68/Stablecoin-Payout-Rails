@@ -195,3 +195,73 @@ sequenceDiagram
     
     Note over SRC,DST: Native USDC — no bridging risk,<br/>no wrapped tokens
 ```
+
+---
+
+## 6. Payout State Machine
+
+This is the authoritative state machine referenced by the OpenAPI spec
+(`PayoutDetail.status`). Only the transitions drawn below are legal —
+anything else is a bug and must trip the `invalid_state_transition` alert.
+
+```mermaid
+stateDiagram-v2
+    [*] --> QUEUED: POST /payouts/stablecoin accepted
+
+    QUEUED --> COMPLIANCE_SCREENING: worker picks up
+    QUEUED --> CANCELLED: merchant cancels before screening
+
+    COMPLIANCE_SCREENING --> BLOCKED: sanctions HIT / KYT HIGH
+    COMPLIANCE_SCREENING --> PENDING_COMPLIANCE_REVIEW: KYT MEDIUM or Travel Rule hold
+    COMPLIANCE_SCREENING --> PAUSED_DEPEG: stablecoin deviation > 0.5%
+    COMPLIANCE_SCREENING --> EXECUTING: CLEARED
+
+    PENDING_COMPLIANCE_REVIEW --> EXECUTING: reviewer approves (four-eyes)
+    PENDING_COMPLIANCE_REVIEW --> BLOCKED: reviewer rejects
+    PENDING_COMPLIANCE_REVIEW --> CANCELLED: merchant cancels while on hold
+
+    PAUSED_DEPEG --> EXECUTING: peg recovers 30m + compliance sign-off
+    PAUSED_DEPEG --> CANCELLED: merchant cancels
+    PAUSED_DEPEG --> BLOCKED: depeg persists beyond policy window
+
+    EXECUTING --> CONFIRMING: tx broadcast, awaiting confirmations
+    EXECUTING --> FAILED: broadcast failed (RPC / nonce / gas)
+
+    CONFIRMING --> COMPLETED: confirmation depth reached
+    CONFIRMING --> FAILED: tx reverted on-chain
+
+    COMPLETED --> REFUND_INITIATED: reorg detected (§9 runbook) — rare backward edge
+    FAILED --> REFUND_INITIATED: funds returned to merchant balance
+    REFUND_INITIATED --> REFUNDED: merchant balance credited
+
+    BLOCKED --> [*]
+    CANCELLED --> [*]
+    REFUNDED --> [*]
+    COMPLETED --> [*]: terminal (no reorg within monitor window)
+```
+
+### Legal backward transitions
+
+There are exactly two backward transitions from a terminal-looking state,
+and both require an audit log entry with a case ID:
+
+1. **`COMPLETED` → `REFUND_INITIATED`** — only on detected reorg below the
+   required confirmation depth. See runbook §9. The reorg detector is the
+   only producer of this transition.
+2. **`PENDING_COMPLIANCE_REVIEW` → `EXECUTING`** — only on a four-eyes
+   reviewer approval. See threat model E6.
+
+Any other attempt to move backward through the state machine is rejected
+by the ledger and raises `invalid_state_transition` for on-call review.
+
+### Timeouts
+
+| From state | Timeout | On expiry |
+|---|---|---|
+| `QUEUED` | 60s | Move to `COMPLIANCE_SCREENING` or page the queue worker |
+| `COMPLIANCE_SCREENING` | 30s per vendor call; 2m overall | `FAILED` with reason `compliance_timeout` |
+| `PENDING_COMPLIANCE_REVIEW` | 4h (see compliance §2) | Auto-`BLOCKED` with appeal link |
+| `EXECUTING` | 10m per broadcast attempt, 3 attempts | `FAILED` with reason `broadcast_exhausted` |
+| `CONFIRMING` | Chain-dependent — see confirmation policy | Depends on reason (reorg / stuck tx) |
+| `REFUND_INITIATED` | 5m | Page the ledger team |
+
