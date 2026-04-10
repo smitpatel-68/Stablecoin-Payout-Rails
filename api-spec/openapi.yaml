@@ -1,26 +1,105 @@
 openapi: 3.0.3
 info:
   title: Stablecoin Payout Rails API
+  version: 1.1.0
   description: |
     Send cross-border USDC/USDT payouts across Polygon, Solana, and Ethereum.
-    Single API endpoint — platform handles network selection, execution, and compliance.
-  version: 1.0.0
+    Single API endpoint — platform handles network selection, execution, and
+    compliance.
+
+    ## Security model
+
+    | Control | Requirement |
+    |---|---|
+    | Transport | TLS 1.2 minimum; TLS 1.3 recommended. HSTS enabled. |
+    | Authentication | `X-API-Key` header on **every** request. Keys are prefixed `sk_live_` or `sk_test_`. |
+    | Request signing | State-changing requests (`POST`, `PATCH`, `DELETE`) **must** be HMAC-SHA256 signed via `X-Signature-Timestamp` and `X-Signature` headers. See *Request signing* below. |
+    | Idempotency | `Idempotency-Key` header on every `POST`. Same key within 24h returns the original result; same key with a different body hash returns `409`. |
+    | Rate limiting | Per-API-key token bucket. Response includes `RateLimit-Limit`, `RateLimit-Remaining`, `RateLimit-Reset`. `429` on breach. |
+    | Webhook delivery | All webhooks are signed with `Tazapay-Signature` (t=timestamp, v1=hex HMAC). Merchants **must** verify. See *Webhook signing* below. |
+    | Key scopes | Keys carry scopes: `payouts:write`, `payouts:read`, `estimate:read`. Principle of least privilege. |
+    | Environment isolation | `sk_live_` keys are rejected on sandbox hosts and vice versa. |
+
+    ## Request signing
+
+    For every state-changing request the client computes:
+
+    ```
+    signed_payload = timestamp + "." + http_method + "." + request_path + "." + sha256_hex(body)
+    X-Signature-Timestamp: <unix_seconds>
+    X-Signature: v1=<hex hmac_sha256(api_secret, signed_payload)>
+    ```
+
+    The server rejects requests where `|now - timestamp| > 300` seconds (replay
+    protection) or where the signature does not verify (returns `401`). The
+    signing secret is a separate value from the API key and is delivered out
+    of band on key issuance.
+
+    ## Webhook signing
+
+    Every outbound webhook carries headers:
+
+    ```
+    Tazapay-Signature: t=<unix_seconds>,v1=<hex hmac_sha256(webhook_secret, t + "." + body)>
+    Tazapay-Event-Id: <uuid>
+    Tazapay-Event-Type: payout.completed
+    ```
+
+    Merchants **must**:
+
+    1. Reject events older than 5 minutes (`|now - t| > 300`).
+    2. Recompute the HMAC with their webhook secret and compare using a
+       constant-time equality check.
+    3. Dedupe on `Tazapay-Event-Id` (at-least-once delivery).
+
+    Delivery is retried with exponential backoff: 30s, 2m, 10m, 1h, 6h, 24h,
+    then abandoned. A webhook delivery dashboard is available for redelivery.
+
+    ## `webhook_url` safety
+
+    The platform issues outbound requests to `webhook_url` from its edge. To
+    prevent SSRF:
+
+    - Scheme must be `https://` (HTTP rejected).
+    - Host must resolve to a public IP. RFC1918, link-local, loopback,
+      `169.254.169.254`, and `*.internal` / `*.local` are rejected at both
+      validation time and request time (DNS rebinding-safe resolver).
+    - Max redirect depth: 0. The configured URL must be the terminal endpoint.
+    - URL is validated on creation and again on every delivery attempt.
+
+  contact:
+    name: Security disclosures
+    url: https://github.com/smitpatel-68/Stablecoin-Payout-Rails/blob/main/SECURITY.md
+  license:
+    name: MIT
+    url: https://github.com/smitpatel-68/Stablecoin-Payout-Rails/blob/main/LICENSE
 
 servers:
   - url: https://api.yourcompany.com/v1
-    description: Production
+    description: Production (requires `sk_live_` key)
   - url: https://sandbox.api.yourcompany.com/v1
-    description: Sandbox
+    description: Sandbox (requires `sk_test_` key)
+
+security:
+  - ApiKeyAuth: []
 
 paths:
   /payouts/stablecoin:
     post:
       summary: Create a stablecoin payout
       description: |
-        Submit a stablecoin payout. Platform will select the optimal network 
-        (unless specified), screen the beneficiary wallet, execute, and confirm.
-        Status delivered via webhook or polling.
+        Submit a stablecoin payout. Platform will select the optimal network
+        (unless specified), screen the beneficiary wallet, execute, and
+        confirm. Status delivered via webhook or polling.
+
+        Requires scope `payouts:write`.
       operationId: createStablecoinPayout
+      security:
+        - ApiKeyAuth: []
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+        - $ref: '#/components/parameters/SignatureTimestamp'
+        - $ref: '#/components/parameters/Signature'
       requestBody:
         required: true
         content:
@@ -31,146 +110,334 @@ paths:
               polygon_auto:
                 summary: Auto-routed payout (platform picks Polygon)
                 value:
-                  idempotency_key: "payout_march_inv_0042"
                   amount:
-                    value: 5000
+                    value: "5000.00"
                     currency: USDC
                   beneficiary:
-                    wallet_address: "0xRecipientAddressHere"
+                    wallet_address: "0x7a3B9c2D4e5F6A8b1C0d2E3f4A5B6c7D8E9f0A1b"
                     name: "Supplier Co. Ltd"
                   network: auto
                   webhook_url: "https://yourapp.com/webhooks/payouts"
               solana_explicit:
                 summary: Explicit Solana payout
                 value:
-                  idempotency_key: "payout_march_inv_0043"
                   amount:
-                    value: 250
+                    value: "250.00"
                     currency: USDC
                   beneficiary:
-                    wallet_address: "SolanaRecipientAddressHere"
+                    wallet_address: "9WzDXwBbmkg8ZTbNMqUxvQRAyrZzDsGYdLVL9zYtAWWM"
                     name: "Freelancer XYZ"
                   network: solana
                   webhook_url: "https://yourapp.com/webhooks/payouts"
       responses:
+        '200':
+          $ref: '#/components/responses/PayoutIdempotentReplay'
         '202':
           description: Payout accepted. Execution begins asynchronously.
+          headers:
+            RateLimit-Limit:
+              $ref: '#/components/headers/RateLimitLimit'
+            RateLimit-Remaining:
+              $ref: '#/components/headers/RateLimitRemaining'
+            RateLimit-Reset:
+              $ref: '#/components/headers/RateLimitReset'
+            Idempotency-Key:
+              $ref: '#/components/headers/IdempotencyKeyEcho'
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/PayoutAccepted'
         '400':
-          description: Bad request — invalid wallet address, amount, or currency
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '409':
+          $ref: '#/components/responses/IdempotencyConflict'
+        '413':
+          $ref: '#/components/responses/PayloadTooLarge'
         '422':
           description: Compliance block
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/ComplianceBlock'
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
+        '500':
+          $ref: '#/components/responses/ServerError'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
 
   /payouts/stablecoin/{payout_id}:
     get:
       summary: Get payout status
       operationId: getPayoutStatus
+      description: |
+        Returns the full payout detail. A payout is only visible to the API
+        key that created it (or to a key with `payouts:read` scope within the
+        same merchant account). Cross-merchant reads return `404`, never
+        `403`, to avoid leaking the existence of foreign payout IDs.
+      security:
+        - ApiKeyAuth: []
       parameters:
         - name: payout_id
           in: path
           required: true
           schema:
             type: string
+            pattern: '^po_[A-Z0-9]{12,24}$'
+            maxLength: 32
       responses:
         '200':
+          description: Payout detail
+          headers:
+            RateLimit-Limit:
+              $ref: '#/components/headers/RateLimitLimit'
+            RateLimit-Remaining:
+              $ref: '#/components/headers/RateLimitRemaining'
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/PayoutDetail'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
+        '500':
+          $ref: '#/components/responses/ServerError'
 
   /payouts/stablecoin/estimate:
     post:
       summary: Estimate fee and network for a payout
-      description: Get a fee estimate and network recommendation before committing.
+      description: |
+        Get a fee estimate and network recommendation before committing.
+        Estimates are valid for 30 seconds — use the returned `expires_at`.
+        Does not require an idempotency key (read-only).
+
+        Requires scope `estimate:read`.
       operationId: estimatePayout
+      security:
+        - ApiKeyAuth: []
       requestBody:
         required: true
         content:
           application/json:
             schema:
               type: object
+              required: [amount]
+              additionalProperties: false
               properties:
                 amount:
-                  type: object
-                  properties:
-                    value:
-                      type: number
-                    currency:
-                      type: string
+                  $ref: '#/components/schemas/Amount'
                 network:
-                  type: string
-                  default: auto
+                  $ref: '#/components/schemas/Network'
       responses:
         '200':
+          description: Fee estimate
+          headers:
+            RateLimit-Limit:
+              $ref: '#/components/headers/RateLimitLimit'
+            RateLimit-Remaining:
+              $ref: '#/components/headers/RateLimitRemaining'
+            Cache-Control:
+              schema:
+                type: string
+                example: "private, max-age=30"
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/FeeEstimate'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
+        '500':
+          $ref: '#/components/responses/ServerError'
 
 components:
+
+  parameters:
+
+    IdempotencyKey:
+      name: Idempotency-Key
+      in: header
+      required: true
+      description: |
+        Client-generated unique key. Scoped per merchant. Same key within 24h
+        returns the original `202 Accepted` response as `200 OK`. Same key
+        with a different body hash returns `409 Conflict`.
+      schema:
+        type: string
+        pattern: '^[A-Za-z0-9_\-]{1,255}$'
+        minLength: 1
+        maxLength: 255
+        example: "inv_2025_0042_payout"
+
+    SignatureTimestamp:
+      name: X-Signature-Timestamp
+      in: header
+      required: true
+      description: |
+        Unix seconds at which the client produced the signature. The server
+        rejects requests where `|now - timestamp| > 300`.
+      schema:
+        type: integer
+        format: int64
+        example: 1712934000
+
+    Signature:
+      name: X-Signature
+      in: header
+      required: true
+      description: |
+        `v1=<hex>` where `<hex>` is `hmac_sha256(api_secret, timestamp + "." +
+        method + "." + path + "." + sha256_hex(body))`. Use constant-time
+        comparison on the server.
+      schema:
+        type: string
+        pattern: '^v1=[a-f0-9]{64}$'
+        example: "v1=a3b5c...(64 hex)"
+
+  headers:
+
+    RateLimitLimit:
+      description: Max requests allowed in the current window.
+      schema:
+        type: integer
+        example: 1000
+
+    RateLimitRemaining:
+      description: Requests remaining in the current window.
+      schema:
+        type: integer
+        example: 994
+
+    RateLimitReset:
+      description: Unix seconds at which the current rate-limit window resets.
+      schema:
+        type: integer
+        format: int64
+        example: 1712934060
+
+    IdempotencyKeyEcho:
+      description: Echo of the `Idempotency-Key` header the request carried.
+      schema:
+        type: string
+        maxLength: 255
+
+    RetryAfter:
+      description: Seconds the client should wait before retrying.
+      schema:
+        type: integer
+        example: 60
+
   schemas:
+
+    Amount:
+      type: object
+      required: [value, currency]
+      additionalProperties: false
+      properties:
+        value:
+          type: string
+          pattern: '^(0|[1-9][0-9]{0,11})(\.[0-9]{1,6})?$'
+          description: |
+            Decimal string. Up to 12 integer digits and 6 fractional digits
+            (matching USDC/USDT on-chain precision). Clients **must** send a
+            string to avoid IEEE-754 rounding — `amount.value: 0.1 + 0.2`
+            becomes `0.30000000000000004` if sent as a JSON number.
+          example: "5000.00"
+        currency:
+          type: string
+          enum: [USDC, USDT]
+
+    Network:
+      type: string
+      enum: [auto, polygon, solana, ethereum]
+      default: auto
+      description: |
+        `auto` = platform selects optimal network based on amount, volume,
+        and gas. Specify to force a particular chain.
+
+    Beneficiary:
+      type: object
+      required: [wallet_address]
+      additionalProperties: false
+      properties:
+        wallet_address:
+          type: string
+          minLength: 32
+          maxLength: 64
+          pattern: '^(0x[a-fA-F0-9]{40}|[1-9A-HJ-NP-Za-km-z]{32,44})$'
+          description: |
+            EVM address (`0x` + 40 hex chars, EIP-55 checksum validated
+            server-side) for Polygon/Ethereum, or base58 (32-44 chars) for
+            Solana. Contract addresses are rejected unless the merchant has
+            explicitly allowlisted the target.
+        name:
+          type: string
+          minLength: 1
+          maxLength: 255
+          description: |
+            Legal name of beneficiary. Required for Travel Rule when the
+            amount triggers the applicable jurisdictional threshold (see
+            docs/compliance.md §3). This field is PII — see
+            docs/data-classification.md.
+        entity_type:
+          type: string
+          enum: [individual, business]
+
     PayoutRequest:
       type: object
-      required: [idempotency_key, amount, beneficiary]
+      required: [amount, beneficiary]
+      additionalProperties: false
       properties:
-        idempotency_key:
-          type: string
-          description: Unique key — same key returns same payout object, never double-pays
-          example: "inv_2025_0042_payout"
         amount:
-          type: object
-          required: [value, currency]
-          properties:
-            value:
-              type: number
-              minimum: 0.01
-              description: Amount to send
-            currency:
-              type: string
-              enum: [USDC, USDT]
+          $ref: '#/components/schemas/Amount'
         beneficiary:
-          type: object
-          required: [wallet_address]
-          properties:
-            wallet_address:
-              type: string
-              description: EVM address (0x...) for Polygon/Ethereum, base58 for Solana
-            name:
-              type: string
-              description: Legal name of beneficiary (required for Travel Rule if amount > $3,000)
-            entity_type:
-              type: string
-              enum: [individual, business]
+          $ref: '#/components/schemas/Beneficiary'
         network:
-          type: string
-          enum: [auto, polygon, solana, ethereum]
-          default: auto
-          description: |
-            auto = platform selects optimal network based on amount, volume, and gas.
-            Specify to force a particular chain.
+          $ref: '#/components/schemas/Network'
         webhook_url:
           type: string
           format: uri
-          description: URL to receive payout status events
+          maxLength: 2048
+          description: |
+            HTTPS URL to receive payout status events. See *webhook_url
+            safety* in the info block — SSRF-protected.
+          example: "https://yourapp.com/webhooks/payouts"
         metadata:
           type: object
+          maxProperties: 20
           additionalProperties:
             type: string
-          description: Your internal references (invoice_id, order_id, etc.)
+            maxLength: 500
+          description: |
+            Your internal references (invoice_id, order_id, etc.). Maximum
+            20 keys, 500 bytes per value, 10KB total. Do not put PII here —
+            metadata is surfaced in logs and dashboards.
+        tron_fallback_enabled:
+          type: boolean
+          default: false
+          description: |
+            Opt-in to Tron as a USDT-only fallback when Polygon gas spikes.
+            Disabled by default. See docs/compliance.md §5 for the enhanced
+            screening applied to Tron payouts.
 
     PayoutAccepted:
       type: object
+      additionalProperties: false
       properties:
         payout_id:
           type: string
-          example: "po_01HXYZABC..."
+          pattern: '^po_[A-Z0-9]{12,24}$'
+          example: "po_01HXYZABCDEF"
         status:
           type: string
           enum: [QUEUED]
@@ -178,10 +445,12 @@ components:
           type: string
           example: "polygon"
         estimated_fee_usd:
-          type: number
-          example: 0.12
+          type: string
+          pattern: '^[0-9]+(\.[0-9]{1,4})?$'
+          example: "0.12"
         estimated_settlement_minutes:
           type: integer
+          minimum: 0
           example: 2
         created_at:
           type: string
@@ -189,92 +458,276 @@ components:
 
     PayoutDetail:
       type: object
+      additionalProperties: false
       properties:
         payout_id:
           type: string
         status:
           type: string
-          enum: [QUEUED, COMPLIANCE_SCREENING, EXECUTING, CONFIRMING, COMPLETED, FAILED, BLOCKED]
+          enum:
+            - QUEUED
+            - COMPLIANCE_SCREENING
+            - PENDING_COMPLIANCE_REVIEW
+            - EXECUTING
+            - CONFIRMING
+            - COMPLETED
+            - FAILED
+            - BLOCKED
+            - CANCELLED
+            - REFUND_INITIATED
+            - REFUNDED
+          description: |
+            See diagrams/flows.md §6 for the full state machine and legal
+            transitions.
         amount:
-          type: object
-          properties:
-            value:
-              type: number
-            currency:
-              type: string
+          $ref: '#/components/schemas/Amount'
         network:
           type: string
         compliance:
           type: object
+          additionalProperties: false
           properties:
             sanctions_check:
               type: string
               enum: [PASS, FAIL, PENDING]
             kyt_risk_score:
               type: integer
+              minimum: 0
+              maximum: 100
             kyt_verdict:
               type: string
               enum: [LOW, MEDIUM, HIGH]
+            travel_rule_triggered:
+              type: boolean
+            travel_rule_action:
+              type: string
+              enum: [NONE, IVMS_101_SENT, ENHANCED_MONITORING, SELF_CERT_REQUIRED]
         execution:
           type: object
+          additionalProperties: false
           properties:
             tx_hash:
               type: string
-              description: Blockchain transaction hash
+              description: Blockchain transaction hash.
             block_number:
               type: integer
+              minimum: 0
             confirmations:
               type: integer
+              minimum: 0
             fee_paid_usd:
-              type: number
+              type: string
             gas_used:
               type: integer
+              minimum: 0
             settled_at:
               type: string
               format: date-time
 
     FeeEstimate:
       type: object
+      additionalProperties: false
       properties:
         recommended_network:
           type: string
         estimated_fee_usd:
-          type: number
+          type: string
         estimated_settlement_minutes:
           type: integer
         current_gas_gwei:
           type: number
+        expires_at:
+          type: string
+          format: date-time
+          description: Estimate is only valid until this timestamp (30s window).
         alternatives:
           type: array
+          maxItems: 5
           items:
             type: object
+            additionalProperties: false
             properties:
               network:
                 type: string
               fee_usd:
-                type: number
+                type: string
               settlement_minutes:
                 type: integer
 
     ComplianceBlock:
       type: object
+      required: [error, code, message, request_id]
+      additionalProperties: false
       properties:
+        error:
+          type: string
+          enum: [COMPLIANCE_BLOCK]
         code:
           type: string
-          enum: [SANCTIONS_HIT, KYT_HIGH_RISK, TRAVEL_RULE_REQUIRED, JURISDICTION_RESTRICTED]
+          enum:
+            - SANCTIONS_HIT
+            - KYT_HIGH_RISK
+            - TRAVEL_RULE_REQUIRED
+            - JURISDICTION_RESTRICTED
+            - MERCHANT_KYC_INCOMPLETE
         message:
           type: string
+          description: |
+            Human-readable summary. In production, this is intentionally
+            vague to avoid leaking screening logic to adversaries. Sandbox
+            returns more detail.
+          example: "Payout cannot be processed. Contact support with the case_id."
         case_id:
           type: string
+          description: Reference for compliance team lookup.
         remediation:
           type: string
-          description: What the merchant can do to resolve the block
+          description: What the merchant can do to resolve the block, if anything.
+        request_id:
+          type: string
+
+    Error:
+      type: object
+      required: [error, message, request_id]
+      additionalProperties: false
+      properties:
+        error:
+          type: string
+          description: Machine-readable error code.
+          example: VALIDATION_FAILED
+        message:
+          type: string
+          description: Human-readable summary. Deliberately non-specific in production.
+        request_id:
+          type: string
+          description: Include this in support tickets.
+          example: req_01HXYZABC
+        details:
+          type: array
+          description: |
+            Field-level validation errors. Only populated in sandbox, or in
+            production when the error is safe to reveal (e.g. missing
+            required field). Sensitive failures (e.g. compliance) do not
+            include field-level detail.
+          items:
+            type: object
+            additionalProperties: false
+            properties:
+              field:
+                type: string
+              issue:
+                type: string
+
+  responses:
+
+    BadRequest:
+      description: Malformed request — invalid JSON, wrong field type, failed validation.
+      headers:
+        RateLimit-Remaining:
+          $ref: '#/components/headers/RateLimitRemaining'
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+
+    Unauthorized:
+      description: |
+        Missing or invalid API key, missing/expired signature, or signature
+        did not verify. Do not retry without fixing the credential — the
+        server will not provide the reason.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+
+    Forbidden:
+      description: API key is valid but lacks the required scope.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+
+    NotFound:
+      description: Resource does not exist, or does not belong to this merchant.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+
+    IdempotencyConflict:
+      description: |
+        `Idempotency-Key` was reused with a different request body. Fix the
+        conflict by choosing a new key, or resubmit with the original body.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+
+    PayloadTooLarge:
+      description: Request body exceeded 1 MB.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+
+    TooManyRequests:
+      description: Rate limit exceeded. Back off per `Retry-After`.
+      headers:
+        Retry-After:
+          $ref: '#/components/headers/RetryAfter'
+        RateLimit-Limit:
+          $ref: '#/components/headers/RateLimitLimit'
+        RateLimit-Remaining:
+          $ref: '#/components/headers/RateLimitRemaining'
+        RateLimit-Reset:
+          $ref: '#/components/headers/RateLimitReset'
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+
+    ServerError:
+      description: |
+        Internal server error. The `request_id` in the body should be
+        included in any support ticket — we do not reveal stack traces.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+
+    ServiceUnavailable:
+      description: |
+        Platform is intentionally shedding load or a critical dependency
+        (sanctions list, KYT provider, RPC) is unavailable. Retry after the
+        suggested delay. Compliance gating is fail-closed — the platform
+        will not execute payouts while a compliance dependency is down.
+      headers:
+        Retry-After:
+          $ref: '#/components/headers/RetryAfter'
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+
+    PayoutIdempotentReplay:
+      description: |
+        Idempotent replay. The request matched a prior `Idempotency-Key`
+        within the 24h window and the body hash matched. The original
+        payout object is returned.
+      headers:
+        Idempotency-Key:
+          $ref: '#/components/headers/IdempotencyKeyEcho'
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/PayoutAccepted'
 
   securitySchemes:
     ApiKeyAuth:
       type: apiKey
       in: header
       name: X-API-Key
-
-security:
-  - ApiKeyAuth: []
+      description: |
+        API key prefixed `sk_live_` (production) or `sk_test_` (sandbox).
+        Keys are scoped — see *Security model*. Rotate at least every 90
+        days and revoke immediately on suspected compromise.
